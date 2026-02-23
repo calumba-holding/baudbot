@@ -152,11 +152,12 @@ Baudbot is built for utility **and** containment:
 - isolated `baudbot_agent` Unix user (no general sudo)
 - per-UID firewall controls + process isolation
 - source/runtime separation with deploy manifests
+- startup deploy-manifest integrity verification (`warn`/`strict` modes)
 - read-only protection for security-critical files
 - session log hygiene (startup redaction + retention pruning)
 - layered tool and shell guardrails (policy/guidance layer, not sole containment)
 
-See [SECURITY.md](SECURITY.md) for full threat model, trust boundaries, and known risks. In particular: tool/shell guards are defense-in-depth policy layers; hard containment comes from OS/runtime boundaries.
+See [SECURITY.md](SECURITY.md) for full threat model, trust boundaries, and known risks. In particular: many controls here are defense-in-depth (helpful for drift prevention/detection and keeping healthy agents on-task), while hard containment comes from OS/runtime boundaries.
 
 ## Documentation
 
