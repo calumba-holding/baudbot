@@ -339,14 +339,12 @@ The sentry-agent operates in **on-demand mode** — it does NOT poll. Sentry ale
 
 ### Starting the Slack Bridge
 
-The `startup-cleanup.sh` script handles bridge (re)start automatically — it detects broker vs Socket Mode, reads the control-agent UUID, and launches the bridge in a `slack-bridge` tmux session.
+The `startup-cleanup.sh` script handles bridge (re)start automatically — it detects broker vs Socket Mode, reads the control-agent UUID, and starts the bridge as a normal background process.
 
-If you need to restart the bridge manually:
+If you need to restart the bridge manually, rerun startup cleanup and then inspect logs:
 ```bash
-MY_UUID=$(readlink ~/.pi/session-control/control-agent.alias | sed 's/.sock$//')
-tmux kill-session -t slack-bridge 2>/dev/null || true
-tmux new-session -d -s slack-bridge \
-  "unset PKG_EXECPATH; export PATH=\$HOME/.varlock/bin:\$HOME/opt/node-v22.14.0-linux-x64/bin:\$PATH && export PI_SESSION_ID=$MY_UUID && cd ~/runtime/slack-bridge && exec varlock run --path ~/.config/ -- node broker-bridge.mjs"
+bash ~/.pi/agent/skills/control-agent/startup-cleanup.sh UUID1 UUID2 UUID3
+tail -n 200 ~/.pi/agent/logs/slack-bridge.log
 ```
 
 Verify: `curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:7890/send -H 'Content-Type: application/json' -d '{}'` → should return `400`.
@@ -364,7 +362,7 @@ If you need to check manually, use `heartbeat trigger` to run all checks immedia
 When the heartbeat reports a failure, take the appropriate action:
 1. **Missing sentry-agent**: Respawn with tmux and re-send role assignment.
 2. **Orphaned dev-agents**: Kill tmux session and remove worktree.
-3. **Bridge down**: Restart the `slack-bridge` tmux session.
+3. **Bridge down**: Restart via `startup-cleanup.sh`, then check `~/.pi/agent/logs/slack-bridge.log`.
 4. **Stale worktrees**: `git worktree remove --force` + `rmdir` empty parents.
 5. **Stuck todos**: Escalate to user via Slack.
 

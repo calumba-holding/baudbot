@@ -398,7 +398,7 @@ cmd_attach() {
         echo "  sudo baudbot attach                  # defaults to control-agent"
         echo "  sudo baudbot attach --pi control-agent"
         echo "  sudo baudbot attach --pi <uuid>"
-        echo "  sudo baudbot attach --tmux slack-bridge"
+        echo "  sudo baudbot attach --tmux sentry-agent"
         exit 0
         ;;
       *)
