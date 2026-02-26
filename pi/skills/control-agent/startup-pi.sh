@@ -12,14 +12,14 @@
 # Stale .alias symlinks pointing to removed sockets also get cleaned.
 # Then starts the slack-bridge process with the current control-agent UUID.
 #
-# This script is the SOLE owner of the bridge lifecycle. start.sh only does
-# pre-cleanup (kill stale processes, release port) — it never launches the bridge.
+# Process lifecycle is managed via process groups (see runtime/start.sh).
+# When start.sh kills the old control-agent PGID, all spawned services
+# (bridge, workers, etc.) are automatically terminated. This script only needs
+# to launch new services; cleanup is handled by the process group mechanism.
 
 set -euo pipefail
 
-# Prevent varlock SEA binary from misinterpreting argv when called from a
-# session that was itself launched via varlock (PKG_EXECPATH leaks into child
-# processes and causes `varlock run` to treat subcommands as Node module paths).
+# Prevent varlock SEA binary from misinterpreting argv
 unset PKG_EXECPATH 2>/dev/null || true
 
 RUNTIME_NODE_HELPER="$HOME/runtime/bin/lib/runtime-node.sh"
@@ -71,7 +71,7 @@ echo "Cleaned $cleaned stale socket(s)."
 
 # Restart Slack bridge with current control-agent UUID
 echo ""
-echo "=== Slack Bridge Restart ==="
+echo "=== Slack Bridge Startup ==="
 
 # Find control-agent UUID from alias
 CONTROL_ALIAS="$SOCKET_DIR/control-agent.alias"
@@ -86,55 +86,9 @@ fi
 BRIDGE_LOG_DIR="$HOME/.pi/agent/logs"
 BRIDGE_LOG_FILE="$BRIDGE_LOG_DIR/slack-bridge.log"
 BRIDGE_DIR="/opt/baudbot/current/slack-bridge"
-BRIDGE_TMUX_SESSION="slack-bridge"
+BRIDGE_TMUX_SESSION="baudbot-slack-bridge"
 
 mkdir -p "$BRIDGE_LOG_DIR"
-
-# --- Kill anything holding port 7890, any existing bridge tmux session,
-#     and any leftover old-style PID-file supervisor.
-echo "Cleaning up old bridge..."
-
-# Kill the tmux session first — this stops the restart loop from respawning
-# the bridge while we're trying to clean up the port.
-tmux kill-session -t "$BRIDGE_TMUX_SESSION" 2>/dev/null || true
-
-# Kill ALL bridge processes (broker-bridge.mjs and bridge.mjs) to prevent
-# orphaned processes from holding port 7890 after control-agent restarts.
-# This is more aggressive than just killing port holders, but prevents the
-# common failure mode where a bridge process survives tmux session cleanup
-# (e.g., detached, zombied, or in a different session tree).
-BRIDGE_PIDS=$(pgrep -f 'node (broker-)?bridge\.mjs' 2>/dev/null || true)
-if [ -n "$BRIDGE_PIDS" ]; then
-  echo "Killing all bridge processes (SIGTERM): $BRIDGE_PIDS"
-  echo "$BRIDGE_PIDS" | xargs kill 2>/dev/null || true
-  # Wait up to 3s for graceful shutdown
-  for i in 1 2 3; do
-    sleep 1
-    BRIDGE_PIDS=$(pgrep -f 'node (broker-)?bridge\.mjs' 2>/dev/null || true)
-    [ -z "$BRIDGE_PIDS" ] && break
-  done
-  # Force-kill anything that didn't exit
-  if [ -n "$BRIDGE_PIDS" ]; then
-    echo "Force-killing stubborn bridge processes: $BRIDGE_PIDS"
-    echo "$BRIDGE_PIDS" | xargs kill -9 2>/dev/null || true
-    sleep 1
-  fi
-fi
-
-# Final safety check: kill anything still on port 7890
-PORT_PIDS=$(lsof -ti :7890 2>/dev/null || true)
-if [ -n "$PORT_PIDS" ]; then
-  echo "Force-killing remaining processes on port 7890: $PORT_PIDS"
-  echo "$PORT_PIDS" | xargs kill -9 2>/dev/null || true
-  sleep 1
-fi
-
-OLD_PID_FILE="$HOME/.pi/agent/slack-bridge.pid"
-if [ -f "$OLD_PID_FILE" ]; then
-  OLD_PID="$(cat "$OLD_PID_FILE" 2>/dev/null || true)"
-  [ -n "$OLD_PID" ] && kill "$OLD_PID" 2>/dev/null || true
-  rm -f "$OLD_PID_FILE"
-fi
 
 # --- Detect bridge mode ---
 BRIDGE_SCRIPT=""
@@ -156,7 +110,7 @@ fi
 if [ -z "$BRIDGE_SCRIPT" ]; then
   echo "No Slack transport configured (missing broker keys and socket tokens); skipping bridge startup."
   echo ""
-  echo "=== Cleanup Complete ==="
+  echo "=== Startup Complete ==="
   exit 0
 fi
 
@@ -167,7 +121,21 @@ fi
 # - Tracks consecutive fast failures (<60s runtime) and gives up after 10
 # - Backs off: 5s base + 2s per failure, capped at 60s
 # - Kills port holders before retrying (avoids EADDRINUSE spin)
+#
+# Note: tmux creates its own session (PGID), so it's not killed by process group
+# termination. We need to explicitly kill old sessions before creating new ones.
 MAX_CONSECUTIVE_FAILURES=10
+
+# Kill all agent tmux sessions (prefix: baudbot-*)
+# Tmux sessions create their own PGID, so they survive process group cleanup.
+# Using a naming convention allows us to kill all agent sessions without
+# tracking individual session names.
+AGENT_SESSIONS=$(tmux list-sessions -F '#{session_name}' 2>/dev/null | grep '^baudbot-' || true)
+if [ -n "$AGENT_SESSIONS" ]; then
+  echo "Killing agent tmux sessions: $AGENT_SESSIONS"
+  echo "$AGENT_SESSIONS" | xargs -r -I{} tmux kill-session -t {} 2>/dev/null || true
+  sleep 1
+fi
 
 echo "Starting slack-bridge ($BRIDGE_SCRIPT) via tmux..."
 NODE_BIN_DIR="${NODE_BIN_DIR:-$HOME/opt/node/bin}"
@@ -228,4 +196,4 @@ else
 fi
 
 echo ""
-echo "=== Cleanup Complete ==="
+echo "=== Startup Complete ==="
