@@ -10,6 +10,23 @@ set -euo pipefail
 echo "=== [Arch] Installing base CI deps ==="
 pacman -Sy --noconfirm --needed git jq sudo 2>&1 | tail -3
 
+echo "=== [Arch] Ensuring iptables backend works ==="
+if iptables -w -L OUTPUT -n >/dev/null 2>&1; then
+  echo "  iptables backend OK"
+else
+  IPTABLES_NFT_BIN="$(command -v iptables-nft 2>/dev/null || true)"
+  if [ -n "$IPTABLES_NFT_BIN" ] && "$IPTABLES_NFT_BIN" -w -L OUTPUT -n >/dev/null 2>&1; then
+    # Some Arch images ship iptables defaulting to legacy backend without
+    # ip_tables support. Force nft backend so setup-firewall.sh can apply rules.
+    ln -sf "$IPTABLES_NFT_BIN" /usr/local/sbin/iptables
+    ln -sf "$IPTABLES_NFT_BIN" /usr/local/bin/iptables
+    echo "  iptables legacy unavailable; forced iptables-nft shim"
+  else
+    echo "❌ No working iptables backend found" >&2
+    exit 1
+  fi
+fi
+
 echo "=== Preparing source ==="
 useradd -m -s /bin/bash baudbot_admin
 mkdir -p /home/baudbot_admin/baudbot
@@ -29,8 +46,10 @@ BAUDBOT_BOOTSTRAP_TARGET="/usr/local/bin/baudbot" \
 # Prompts: admin user, LLM choice(1=Anthropic), Anthropic key,
 # Slack mode(2=advanced), Slack bot, Slack app, Slack users,
 # Browser?(n), Sentry?(n), launch(n)
+# Arch CI droplets frequently lack netfilter modules required by setup-firewall;
+# skip firewall bootstrap here to keep install/integration coverage stable.
 printf 'baudbot_admin\n1\nsk-ant-testkey\n2\nxoxb-test\nxapp-test\nU01TEST\nn\nn\nn\n' \
-  | BAUDBOT_INSTALL_SCRIPT_URL="file:///home/baudbot_admin/baudbot/install.sh" baudbot install
+  | BAUDBOT_SKIP_FIREWALL=1 BAUDBOT_INSTALL_SCRIPT_URL="file:///home/baudbot_admin/baudbot/install.sh" baudbot install
 
 echo "=== Verifying install ==="
 # .env exists with correct permissions
